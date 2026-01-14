@@ -1,0 +1,63 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-01-13 16:22:22.324774",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "sales_section",
+  "account_groups",
+  "purchase_section",
+  "purchase_account_groups"
+ ],
+ "fields": [
+  {
+   "fieldname": "sales_section",
+   "fieldtype": "Section Break",
+   "label": "Sales"
+  },
+  {
+   "fieldname": "account_groups",
+   "fieldtype": "Table",
+   "label": "Sale Account Groups",
+   "options": "ZATCA Sale Account Group Table"
+  },
+  {
+   "fieldname": "purchase_section",
+   "fieldtype": "Section Break",
+   "label": "Purchase"
+  },
+  {
+   "fieldname": "purchase_account_groups",
+   "fieldtype": "Table",
+   "label": "Purchase Account Groups",
+   "options": "ZATCA Purchase Account Group Table"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-01-13 16:29:52.798525",
+ "modified_by": "Administrator",
+ "module": "Zatca Vat Report",
+ "name": "ZATCA VAT Report Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
