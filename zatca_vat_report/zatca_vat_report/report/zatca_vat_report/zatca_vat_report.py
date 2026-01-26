@@ -9,7 +9,7 @@ def execute(filters=None):
         filters = {}
 
     if not filters.get("from_date") or not filters.get("to_date"):
-        frappe.throw("From Date and To Date are mandatory")
+        return
 
     columns = get_columns()
     data = get_data(filters)
@@ -34,6 +34,7 @@ def get_account_group_map():
     result = {
         "Sales": {},
         "Purchase": {},
+        "Expense": {},
     }
 
     # Sales groups
@@ -52,7 +53,55 @@ def get_account_group_map():
             "tax_rate": row.tax_rate
         }
 
+    # Expense groups (NEW)
+    for row in settings.expense_account_groups:
+        group = frappe.get_doc("ZATCA Account Group", row.account_group)
+        result["Expense"][group.account_group_label] = {
+            "accounts": [acc.account for acc in group.linked_accounts],
+            "tax_rate": row.tax_rate
+        }
+
     return result
+
+def get_expense_vat_from_journal_entries(filters, accounts):
+    conditions = []
+    values = {}
+
+    # Base conditions
+    conditions.append("je.docstatus = 1")
+    conditions.append("je.is_system_generated = 0")
+    conditions.append("je.posting_date BETWEEN %(from_date)s AND %(to_date)s")
+
+    if filters.get("company"):
+        conditions.append("je.company = %(company)s")
+        values["company"] = filters["company"]
+
+    if accounts:
+        conditions.append("jea.account IN %(accounts)s")
+        values["accounts"] = tuple(accounts)
+
+    values.update(filters)
+
+    query = f"""
+        SELECT
+            IFNULL(
+                SUM(
+                    CASE
+                        WHEN jea.debit > 0 THEN jea.debit
+                        WHEN jea.credit > 0 THEN -jea.credit
+                        ELSE 0
+                    END
+                ), 0
+            ) AS net_amount
+        FROM `tabJournal Entry` je
+        INNER JOIN `tabJournal Entry Account` jea
+            ON jea.parent = je.name
+        WHERE
+            {' AND '.join(conditions)}
+    """
+
+    result = frappe.db.sql(query, values, as_dict=True)
+    return result[0].net_amount or 0
 
 
 def get_taxable_summary(doctype, tax_table, filters, accounts, tax_rate, is_sales=True):
@@ -237,12 +286,38 @@ def get_data(filters):
 
     data.append({})
 
+        # ---------- VAT ON OTHER EXPENSES ----------
+    data.append({"title": "<b>VAT on Other Expenses</b>"})
+
+    expense_total = 0
+
+    for label, info in groups["Expense"].items():
+        net_vat = get_expense_vat_from_journal_entries(
+            filters,
+            info["accounts"]
+        )
+
+        expense_total += net_vat
+
+        data.append({
+            "title": label,
+            "net_vat_amount": net_vat
+        })
+
+    data.append({
+        "title": "<b>Total Other Expenses VAT</b>",
+        "net_vat_amount": expense_total
+    })
+
+    data.append({})
+
+
     # ---------- NET VAT ----------
     data.append({"title": "<b>Net VAT Due</b>"})
 
     data.append({
         "title": "Total VAT due for current period",
-        "net_vat_amount": sales_total - purchase_total
+        "net_vat_amount": sales_total - (purchase_total + expense_total)
     })
 
     return data
