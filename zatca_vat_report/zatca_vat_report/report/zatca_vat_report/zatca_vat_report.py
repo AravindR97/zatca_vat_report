@@ -115,6 +115,15 @@ def get_taxable_summary(doctype, tax_table, filters, accounts, tax_rate, is_sale
     conditions.append("inv.docstatus = 1")
     conditions.append("inv.posting_date BETWEEN %(from_date)s AND %(to_date)s")
 
+    if is_sales and frappe.db.exists("DocType", "ZATCA Integration Log"):
+        conditions.append("""
+            inv.name NOT IN (
+                SELECT zil.invoice_reference
+                FROM `tabZATCA Integration Log` zil
+                WHERE zil.status = 'Rejected'
+            )
+        """)
+
     if not is_sales:
         conditions.append("(inv.bill_date IS NULL OR inv.bill_date >= %(from_date)s)")
 
