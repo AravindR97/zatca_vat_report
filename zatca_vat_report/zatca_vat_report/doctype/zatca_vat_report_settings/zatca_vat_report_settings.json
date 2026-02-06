@@ -8,7 +8,9 @@
   "sales_section",
   "account_groups",
   "purchase_section",
-  "purchase_account_groups"
+  "purchase_account_groups",
+  "expenses_section",
+  "expense_account_groups"
  ],
  "fields": [
   {
@@ -32,13 +34,24 @@
    "fieldtype": "Table",
    "label": "Purchase Account Groups",
    "options": "ZATCA Purchase Account Group Table"
+  },
+  {
+   "fieldname": "expenses_section",
+   "fieldtype": "Section Break",
+   "label": "Expenses"
+  },
+  {
+   "fieldname": "expense_account_groups",
+   "fieldtype": "Table",
+   "label": "Expense Account Groups",
+   "options": "ZATCA Expense Account Group Table"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-01-13 16:29:52.798525",
+ "modified": "2026-01-24 14:10:40.685475",
  "modified_by": "Administrator",
  "module": "Zatca Vat Report",
  "name": "ZATCA VAT Report Settings",
