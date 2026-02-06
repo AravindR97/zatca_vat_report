@@ -312,7 +312,12 @@ def get_data(filters):
     groups = get_account_group_map()
 
     # ---------- VAT ON SALES ----------
-    data.append({"title": "<b>VAT on Sales</b>"})
+    data.append({
+        "title": "<b>VAT on Sales</b>",
+        "amount": None,
+        "adjustment": None,
+        "net_vat_amount": None
+    })
 
     sales_total = 0
 
@@ -344,13 +349,25 @@ def get_data(filters):
 
     data.append({
         "title": "<b>Total Sales VAT</b>",
+        "amount": None,
+        "adjustment": None,
         "net_vat_amount": sales_total
     })
 
-    data.append({})
+    data.append({
+        "title": None,
+        "amount": None,
+        "adjustment": None,
+        "net_vat_amount": None
+    })
 
     # ---------- VAT ON PURCHASES ----------
-    data.append({"title": "<b>VAT on Purchases</b>"})
+    data.append({
+        "title": "<b>VAT on Purchases</b>",
+        "amount": None,
+        "adjustment": None,
+        "net_vat_amount": None
+    })
 
     purchase_total = 0
 
@@ -382,13 +399,25 @@ def get_data(filters):
 
     data.append({
         "title": "<b>Total Purchase VAT</b>",
+        "amount": None,
+        "adjustment": None,
         "net_vat_amount": purchase_total
     })
 
-    data.append({})
+    data.append({
+        "title": None,
+        "amount": None,
+        "adjustment": None,
+        "net_vat_amount": None
+    })
 
     # ---------- VAT ON OTHER EXPENSES ----------
-    data.append({"title": "<b>VAT on Other Expenses</b>"})
+    data.append({
+        "title": "<b>VAT on Other Expenses</b>",
+        "amount": None,
+        "adjustment": None,
+        "net_vat_amount": None
+    })
 
     expense_total = 0
 
@@ -414,18 +443,32 @@ def get_data(filters):
 
         data.append({
             "title": label,
+            "amount": None,
+            "adjustment": None,
             "net_vat_amount": net_vat
         })
 
     data.append({
         "title": "<b>Total Other Expenses VAT</b>",
+        "amount": None,
+        "adjustment": None,
         "net_vat_amount": expense_total
     })
 
-    data.append({})
+    data.append({
+        "title": None,
+        "amount": None,
+        "adjustment": None,
+        "net_vat_amount": None
+    })
 
     # ---------- NET VAT ----------
-    data.append({"title": "<b>Net VAT Due</b>"})
+    data.append({
+        "title": "<b>Net VAT Due</b>",
+        "amount": None,
+        "adjustment": None,
+        "net_vat_amount": None
+    })
 
     data.append({
         "title": "Total VAT due for current period",
