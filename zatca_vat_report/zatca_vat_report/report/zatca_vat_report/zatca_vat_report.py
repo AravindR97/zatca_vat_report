@@ -104,6 +104,40 @@ def get_expense_vat_from_journal_entries(filters, accounts):
     return result[0].get("net_amount", 0) or 0
 
 
+def get_expense_vat_from_expense_claims(filters, accounts):
+    conditions = []
+    values = {}
+
+    # Base conditions
+    conditions.append("ec.docstatus = 1")
+    conditions.append("ec.posting_date BETWEEN %(from_date)s AND %(to_date)s")
+
+    if filters.get("company"):
+        conditions.append("ec.company = %(company)s")
+        values["company"] = filters["company"]
+
+    if accounts:
+        conditions.append("ect.account_head IN %(accounts)s")
+        values["accounts"] = tuple(accounts)
+
+    values.update(filters)
+
+    query = f"""
+        SELECT
+            IFNULL(
+                SUM(ABS(ect.tax_amount)), 0
+            ) AS net_amount
+        FROM `tabExpense Claim` ec
+        INNER JOIN `tabExpense Taxes and Charges` ect
+            ON ect.parent = ec.name
+        WHERE
+            {' AND '.join(conditions)}
+    """
+
+    result = frappe.db.sql(query, values, as_dict=True)
+    return result[0].get("net_amount", 0) or 0
+
+
 def get_taxable_summary(doctype, tax_table, filters, accounts, tax_rate, is_sales=True):
     """
     Calculate actual taxable amount with optimized logic:
@@ -359,10 +393,22 @@ def get_data(filters):
     expense_total = 0
 
     for label, info in groups["Expense"].items():
-        net_vat = get_expense_vat_from_journal_entries(
+        # Get VAT from Journal Entries
+        je_vat = get_expense_vat_from_journal_entries(
             filters,
             info["accounts"]
         )
+        
+        # Get VAT from Expense Claims (only if Expense Claim is present)
+        ec_vat = 0
+        if frappe.db.exists("DocType", "Expense Claim"):
+            ec_vat = get_expense_vat_from_expense_claims(
+                filters,
+                info["accounts"]
+            )
+        
+        # Total VAT for this expense group
+        net_vat = je_vat + ec_vat
 
         expense_total += net_vat
 
