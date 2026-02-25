@@ -306,6 +306,219 @@ def get_taxable_summary(doctype, tax_table, filters, accounts, tax_rate, is_sale
     return frappe.db.sql(query, values, as_dict=True)
 
 
+def get_purchase_vat_split(filters, accounts=None):
+    """Split VAT on purchases into stock, expense, and asset based on expense head.
+
+    Logic:
+    - Asset: Account with root_type = 'Asset' AND account_type in ('Fixed Asset', 'Capital Work in Progress')
+    - Expense: Account with root_type = 'Expense' OR account_type in ('Expense Account', 'Indirect Expense')
+    - Purchase (stock-related): Everything else used as expense head on Purchase Invoice
+    """
+    if filters is None:
+        filters = {}
+
+    conditions = [
+        "inv.docstatus = 1",
+        "inv.posting_date BETWEEN %(from_date)s AND %(to_date)s",
+        "(inv.bill_date IS NULL OR inv.bill_date >= %(from_date)s)",
+    ]
+
+    values = {}
+    if filters.get("company"):
+        conditions.append("inv.company = %(company)s")
+        values["company"] = filters["company"]
+
+    values.update(filters)
+
+    account_condition = ""
+    if accounts:
+        account_condition = "AND tax.account_head IN %(accounts)s"
+        values["accounts"] = tuple(accounts)
+
+    where_clause = " AND ".join(conditions)
+
+    # 1) Get taxable base split per invoice by account classification.
+    # We classify using effective_account_type (with parent fallback).
+    #
+    # Buckets:
+    # - Asset:   account_type in
+    #            ('Fixed Asset', 'Capital Work in Progress',
+    #             'Accumulated Depreciation',
+    #             'Expenses Included In Asset Valuation',
+    #             'Asset Received But Not Billed')
+    # - Expense: account_type in
+    #            ('Expense Account', 'Direct Expense', 'Indirect Expense',
+    #             'Depreciation', 'Service Received But Not Billed',
+    #             'Expenses Included In Valuation', 'Chargeable')
+    #            OR root_type = 'Expense'
+    # - Purchase (stock): account_type in
+    #            ('Cost of Goods Sold', 'Stock', 'Stock Adjustment',
+    #             'Stock Received But Not Billed')
+    base_query = f"""
+        SELECT
+            inv.name AS invoice,
+            inv.is_return,
+            SUM(
+                CASE
+                    WHEN COALESCE(acc.account_type, acc_parent.account_type) IN (
+                            'Fixed Asset',
+                            'Capital Work in Progress',
+                            'Accumulated Depreciation',
+                            'Expenses Included In Asset Valuation',
+                            'Asset Received But Not Billed'
+                         )
+                    THEN pii.base_net_amount
+                    ELSE 0
+                END
+            ) AS asset_base,
+            SUM(
+                CASE
+                    WHEN COALESCE(acc.account_type, acc_parent.account_type) IN (
+                            'Expense Account',
+                            'Direct Expense',
+                            'Indirect Expense',
+                            'Depreciation',
+                            'Service Received But Not Billed',
+                            'Expenses Included In Valuation',
+                            'Chargeable'
+                         )
+                         OR COALESCE(acc.root_type, acc_parent.root_type) = 'Expense'
+                    THEN pii.base_net_amount
+                    ELSE 0
+                END
+            ) AS expense_base,
+            SUM(
+                CASE
+                    WHEN COALESCE(acc.account_type, acc_parent.account_type) IN (
+                        'Cost of Goods Sold',
+                        'Stock',
+                        'Stock Adjustment',
+                        'Stock Received But Not Billed'
+                    )
+                    THEN pii.base_net_amount
+                    ELSE 0
+                END
+            ) AS purchase_base
+        FROM `tabPurchase Invoice` inv
+        INNER JOIN `tabPurchase Invoice Item` pii
+            ON pii.parent = inv.name
+        LEFT JOIN `tabAccount` acc
+            ON acc.name = pii.expense_account
+        LEFT JOIN `tabAccount` acc_parent
+            ON acc_parent.name = acc.parent_account
+        WHERE {where_clause}
+        GROUP BY inv.name, inv.is_return
+    """
+
+    base_rows = frappe.db.sql(base_query, values, as_dict=True)
+    base_map = {row.invoice: row for row in base_rows}
+
+    if not base_map:
+        return {
+            "purchase": {"amount": 0, "adjustment": 0, "net_vat": 0},
+            "expense": {"amount": 0, "adjustment": 0, "net_vat": 0},
+            "asset": {"amount": 0, "adjustment": 0, "net_vat": 0},
+        }
+
+    # 2) Get total VAT per invoice from tax rows
+    vat_query = f"""
+        SELECT
+            inv.name AS invoice,
+            inv.is_return,
+            IFNULL(
+                SUM(
+                    CASE
+                        WHEN inv.is_return = 1 THEN -ABS(tax.tax_amount)
+                        ELSE ABS(tax.tax_amount)
+                    END
+                ),
+                0
+            ) AS net_vat
+        FROM `tabPurchase Invoice` inv
+        INNER JOIN `tabPurchase Taxes and Charges` tax
+            ON tax.parent = inv.name
+        INNER JOIN `tabAccount` tax_acc
+            ON tax_acc.name = tax.account_head
+        WHERE
+            {where_clause}
+            AND tax_acc.account_type = 'Tax'
+            {account_condition}
+        GROUP BY inv.name, inv.is_return
+    """
+
+    vat_rows = frappe.db.sql(vat_query, values, as_dict=True)
+
+    totals = {
+        "purchase": {
+            "amount": 0,  # taxable base for normal invoices
+            "adjustment": 0,  # taxable base for returns
+            "vat_amount": 0,  # VAT on normal invoices
+            "vat_adjustment": 0,  # VAT on returns
+        },
+        "expense": {
+            "amount": 0,
+            "adjustment": 0,
+            "vat_amount": 0,
+            "vat_adjustment": 0,
+        },
+        "asset": {
+            "amount": 0,
+            "adjustment": 0,
+            "vat_amount": 0,
+            "vat_adjustment": 0,
+        },
+    }
+
+    for row in vat_rows:
+        base_info = base_map.get(row.invoice)
+        if not base_info:
+            continue
+
+        purchase_base = base_info.purchase_base or 0
+        expense_base = base_info.expense_base or 0
+        asset_base = base_info.asset_base or 0
+
+        total_base = purchase_base + expense_base + asset_base
+        if not total_base:
+            continue
+
+        net_vat = row.net_vat or 0
+
+        purchase_share = net_vat * (purchase_base / total_base)
+        expense_share = net_vat * (expense_base / total_base)
+        asset_share = net_vat * (asset_base / total_base)
+
+        # For non-return invoices: accumulate taxable base as "amount"
+        # and VAT as "vat_amount".
+        # For returns: base goes to "adjustment", VAT to "vat_adjustment".
+        if row.is_return:
+            totals["purchase"]["adjustment"] += abs(purchase_base)
+            totals["expense"]["adjustment"] += abs(expense_base)
+            totals["asset"]["adjustment"] += abs(asset_base)
+
+            totals["purchase"]["vat_adjustment"] += abs(purchase_share)
+            totals["expense"]["vat_adjustment"] += abs(expense_share)
+            totals["asset"]["vat_adjustment"] += abs(asset_share)
+        else:
+            totals["purchase"]["amount"] += purchase_base
+            totals["expense"]["amount"] += expense_base
+            totals["asset"]["amount"] += asset_base
+
+            totals["purchase"]["vat_amount"] += purchase_share
+            totals["expense"]["vat_amount"] += expense_share
+            totals["asset"]["vat_amount"] += asset_share
+
+    # Convert internal VAT breakdown to a single net_vat field per bucket
+    result = {}
+    for key, value in totals.items():
+        net_vat = (value.get("vat_amount", 0) or 0) - (value.get("vat_adjustment", 0) or 0)
+        result[key] = {
+            "amount": value.get("amount", 0) or 0,
+            "adjustment": value.get("adjustment", 0) or 0,
+            "net_vat": net_vat,
+        }
+
+    return result
 
 def get_data(filters):
     data = []
@@ -368,34 +581,31 @@ def get_data(filters):
         "adjustment": None,
         "net_vat_amount": None
     })
+    purchase_split = get_purchase_vat_split(filters)
 
     purchase_total = 0
 
     for label, info in groups["Purchase"].items():
-        rows = get_taxable_summary(
-            "tabPurchase Invoice",
-            "tabPurchase Taxes and Charges",
-            filters,
-            info["accounts"],
-            info["tax_rate"],
-            is_sales=False
-        )
+        split = get_purchase_vat_split(filters, info["accounts"])
 
-        amount = sum(r.get("amount", 0) for r in rows)
-        adjustment = sum(r.get("adjustment", 0) for r in rows)
+        for key, title_suffix in (
+            ("purchase", "Purchase"),
+            ("expense", "Expense"),
+            ("asset", "Asset Purchase"),
+        ):
+            bucket = split.get(key, {}) or {}
+            amount = bucket.get("amount", 0) or 0
+            adjustment = bucket.get("adjustment", 0) or 0
+            net_vat = bucket.get("net_vat", 0) or 0
 
-        tax_rate = info["tax_rate"] or 0
-        net_vat = (amount - adjustment) * (tax_rate / 100)
+            purchase_total += net_vat
 
-        purchase_total += net_vat
-
-        data.append({
-            "title": label,
-            "amount": amount,
-            "adjustment": adjustment,
-            "net_vat_amount": net_vat
-        })
-
+            data.append({
+                "title": f"{label} - {title_suffix}",
+                "amount": amount,
+                "adjustment": adjustment,
+                "net_vat_amount": net_vat,
+            })
 
     data.append({
         "title": "<b>Total Purchase VAT</b>",
