@@ -533,6 +533,8 @@ def get_data(filters):
     })
 
     sales_total = 0
+    total_sales_amount = 0
+    total_sales_adjustment = 0
 
     for label, info in groups["Sales"].items():
         rows = get_taxable_summary(
@@ -551,6 +553,8 @@ def get_data(filters):
         net_vat = (amount - adjustment) * (tax_rate / 100)
 
         sales_total += net_vat
+        total_sales_amount += amount
+        total_sales_adjustment += adjustment
 
         data.append({
             "title": label,
@@ -562,8 +566,8 @@ def get_data(filters):
 
     data.append({
         "title": "<b>Total Sales VAT</b>",
-        "amount": None,
-        "adjustment": None,
+        "amount": total_sales_amount,
+        "adjustment": total_sales_adjustment,
         "net_vat_amount": sales_total
     })
 
@@ -584,6 +588,8 @@ def get_data(filters):
     purchase_split = get_purchase_vat_split(filters)
 
     purchase_total = 0
+    total_purchase_amount = 0
+    total_purchase_adjustment = 0
 
     for label, info in groups["Purchase"].items():
         split = get_purchase_vat_split(filters, info["accounts"])
@@ -599,6 +605,8 @@ def get_data(filters):
             net_vat = bucket.get("net_vat", 0) or 0
 
             purchase_total += net_vat
+            total_purchase_amount += amount
+            total_purchase_adjustment += adjustment
 
             data.append({
                 "title": f"{label} - {title_suffix}",
@@ -609,8 +617,8 @@ def get_data(filters):
 
     data.append({
         "title": "<b>Total Purchase VAT</b>",
-        "amount": None,
-        "adjustment": None,
+        "amount": total_purchase_amount,
+        "adjustment": total_purchase_adjustment,
         "net_vat_amount": purchase_total
     })
 
@@ -680,9 +688,15 @@ def get_data(filters):
         "net_vat_amount": None
     })
 
+    net_vat_due = sales_total - (purchase_total + expense_total)
+    total_amount = total_sales_amount - total_purchase_amount
+    total_adjustment = total_sales_adjustment - total_purchase_adjustment
+
     data.append({
         "title": "Total VAT due for current period",
-        "net_vat_amount": sales_total - (purchase_total + expense_total)
+        "amount": total_amount,
+        "adjustment": total_adjustment,
+        "net_vat_amount": net_vat_due
     })
 
     return data
