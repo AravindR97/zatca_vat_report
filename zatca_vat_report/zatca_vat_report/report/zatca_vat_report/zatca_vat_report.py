@@ -166,8 +166,8 @@ def get_taxable_summary(doctype, tax_table, filters, accounts, tax_rate, is_sale
             )
         """)
 
-    if not is_sales:
-        conditions.append("(inv.bill_date IS NULL OR inv.bill_date >= %(from_date)s)")
+    # if not is_sales:
+    #     conditions.append("(inv.bill_date IS NULL OR inv.bill_date >= %(from_date)s)")
 
     values.update(filters)
 
@@ -260,7 +260,7 @@ def get_taxable_summary(doctype, tax_table, filters, accounts, tax_rate, is_sale
                                 THEN inv.base_net_total
                                 -- Multiple tax rows: Calculate share using reverse method
                                 WHEN acc_master.tax_rate IS NOT NULL AND acc_master.tax_rate > 0
-                                THEN ABS(tax.tax_amount) / (acc_master.tax_rate / 100)
+                                THEN ABS(tax.base_tax_amount) / (acc_master.tax_rate / 100)
                                 ELSE 0
                             END
                         ELSE 0
@@ -281,7 +281,7 @@ def get_taxable_summary(doctype, tax_table, filters, accounts, tax_rate, is_sale
                                 THEN ABS(inv.base_net_total)
                                 -- Multiple tax rows: Calculate share using reverse method
                                 WHEN acc_master.tax_rate IS NOT NULL AND acc_master.tax_rate > 0
-                                THEN ABS(tax.tax_amount) / (acc_master.tax_rate / 100)
+                                THEN ABS(tax.base_tax_amount) / (acc_master.tax_rate / 100)
                                 ELSE 0
                             END
                         ELSE 0
