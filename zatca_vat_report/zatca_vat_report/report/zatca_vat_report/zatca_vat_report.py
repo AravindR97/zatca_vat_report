@@ -2,6 +2,7 @@
 # For license information, please see license.txt
 
 import frappe
+from frappe.utils import flt
 
 
 def execute(filters=None):
@@ -420,20 +421,16 @@ def get_purchase_vat_split(filters, accounts=None):
             "asset": {"amount": 0, "adjustment": 0, "net_vat": 0},
         }
 
-    # 2) Get total VAT per invoice from tax rows
+    # 2) Get each tax row separately (so different VAT rates / item tax template are not mixed).
+    # Each row has its own taxable base = tax_amount / (rate/100). We then split that base
+    # into purchase/expense/asset by this invoice's item proportion.
     vat_query = f"""
         SELECT
             inv.name AS invoice,
             inv.is_return,
-            IFNULL(
-                SUM(
-                    CASE
-                        WHEN inv.is_return = 1 THEN -ABS(tax.tax_amount)
-                        ELSE ABS(tax.tax_amount)
-                    END
-                ),
-                0
-            ) AS net_vat
+            tax.account_head,
+            tax.tax_amount,
+            COALESCE(NULLIF(tax.rate, 0), tax_acc.tax_rate, 0) AS tax_rate
         FROM `tabPurchase Invoice` inv
         INNER JOIN `tabPurchase Taxes and Charges` tax
             ON tax.parent = inv.name
@@ -443,10 +440,33 @@ def get_purchase_vat_split(filters, accounts=None):
             {where_clause}
             AND tax_acc.account_type = 'Tax'
             {account_condition}
-        GROUP BY inv.name, inv.is_return
     """
 
     vat_rows = frappe.db.sql(vat_query, values, as_dict=True)
+
+    # Per-invoice: base already covered by non-zero tax rows; remaining = zero-rated base
+    base_from_positive_rate = {}
+    zero_rate_row_count = {}
+    for row in vat_rows:
+        inv = row.invoice
+        tax_rate = flt(row.tax_rate, 2) or 0
+        if tax_rate > 0:
+            base_from_positive_rate[inv] = base_from_positive_rate.get(inv, 0) + (
+                abs(flt(row.tax_amount, 2)) / (tax_rate / 100)
+            )
+        else:
+            zero_rate_row_count[inv] = zero_rate_row_count.get(inv, 0) + 1
+
+    # Zero-rated taxable base = invoice total base minus base at non-zero rates (split across 0% rows)
+    zero_rated_base_per_row = {}
+    for inv, base_info in base_map.items():
+        total_base = (base_info.purchase_base or 0) + (base_info.expense_base or 0) + (base_info.asset_base or 0)
+        if total_base <= 0:
+            continue
+        covered = base_from_positive_rate.get(inv, 0)
+        zero_base = max(0, total_base - covered)
+        n_zero = max(1, zero_rate_row_count.get(inv, 0))
+        zero_rated_base_per_row[inv] = zero_base / n_zero
 
     totals = {
         "purchase": {
@@ -482,31 +502,44 @@ def get_purchase_vat_split(filters, accounts=None):
         if not total_base:
             continue
 
-        net_vat = row.net_vat or 0
+        # Taxable base for this tax row: from tax_amount/rate when rate > 0, else zero-rated base
+        tax_rate = flt(row.tax_rate, 2) or 0
+        if tax_rate > 0:
+            row_base = abs(flt(row.tax_amount, 2)) / (tax_rate / 100)
+        else:
+            row_base = zero_rated_base_per_row.get(row.invoice, 0)
 
-        purchase_share = net_vat * (purchase_base / total_base)
-        expense_share = net_vat * (expense_base / total_base)
-        asset_share = net_vat * (asset_base / total_base)
+        net_vat = flt(row.tax_amount, 2) or 0
+        if row.is_return:
+            net_vat = -abs(net_vat)
 
-        # For non-return invoices: accumulate taxable base as "amount"
-        # and VAT as "vat_amount".
+        # Split this row's base and VAT by invoice's purchase/expense/asset proportion
+        purchase_share = row_base * (purchase_base / total_base)
+        expense_share = row_base * (expense_base / total_base)
+        asset_share = row_base * (asset_base / total_base)
+
+        vat_purchase = net_vat * (purchase_base / total_base)
+        vat_expense = net_vat * (expense_base / total_base)
+        vat_asset = net_vat * (asset_base / total_base)
+
+        # For non-return invoices: accumulate taxable base as "amount" and VAT as "vat_amount".
         # For returns: base goes to "adjustment", VAT to "vat_adjustment".
         if row.is_return:
-            totals["purchase"]["adjustment"] += abs(purchase_base)
-            totals["expense"]["adjustment"] += abs(expense_base)
-            totals["asset"]["adjustment"] += abs(asset_base)
+            totals["purchase"]["adjustment"] += abs(purchase_share)
+            totals["expense"]["adjustment"] += abs(expense_share)
+            totals["asset"]["adjustment"] += abs(asset_share)
 
-            totals["purchase"]["vat_adjustment"] += abs(purchase_share)
-            totals["expense"]["vat_adjustment"] += abs(expense_share)
-            totals["asset"]["vat_adjustment"] += abs(asset_share)
+            totals["purchase"]["vat_adjustment"] += abs(vat_purchase)
+            totals["expense"]["vat_adjustment"] += abs(vat_expense)
+            totals["asset"]["vat_adjustment"] += abs(vat_asset)
         else:
-            totals["purchase"]["amount"] += purchase_base
-            totals["expense"]["amount"] += expense_base
-            totals["asset"]["amount"] += asset_base
+            totals["purchase"]["amount"] += purchase_share
+            totals["expense"]["amount"] += expense_share
+            totals["asset"]["amount"] += asset_share
 
-            totals["purchase"]["vat_amount"] += purchase_share
-            totals["expense"]["vat_amount"] += expense_share
-            totals["asset"]["vat_amount"] += asset_share
+            totals["purchase"]["vat_amount"] += vat_purchase
+            totals["expense"]["vat_amount"] += vat_expense
+            totals["asset"]["vat_amount"] += vat_asset
 
     # Convert internal VAT breakdown to a single net_vat field per bucket
     result = {}
@@ -533,8 +566,8 @@ def get_data(filters):
     })
 
     sales_total = 0
-    total_sales_amount = 0
-    total_sales_adjustment = 0
+    sales_total_amount = 0
+    sales_total_adjustment = 0
 
     for label, info in groups["Sales"].items():
         rows = get_taxable_summary(
@@ -549,12 +582,13 @@ def get_data(filters):
         amount = sum(r.get("amount", 0) for r in rows)
         adjustment = sum(r.get("adjustment", 0) for r in rows)
 
+        sales_total_amount += amount
+        sales_total_adjustment += adjustment
+
         tax_rate = info["tax_rate"] or 0
         net_vat = (amount - adjustment) * (tax_rate / 100)
 
         sales_total += net_vat
-        total_sales_amount += amount
-        total_sales_adjustment += adjustment
 
         data.append({
             "title": label,
@@ -563,11 +597,10 @@ def get_data(filters):
             "net_vat_amount": net_vat
         })
 
-
     data.append({
         "title": "<b>Total Sales VAT</b>",
-        "amount": total_sales_amount,
-        "adjustment": total_sales_adjustment,
+        "amount": sales_total_amount,
+        "adjustment": sales_total_adjustment,
         "net_vat_amount": sales_total
     })
 
@@ -588,8 +621,8 @@ def get_data(filters):
     purchase_split = get_purchase_vat_split(filters)
 
     purchase_total = 0
-    total_purchase_amount = 0
-    total_purchase_adjustment = 0
+    purchase_total_amount = 0
+    purchase_total_adjustment = 0
 
     for label, info in groups["Purchase"].items():
         split = get_purchase_vat_split(filters, info["accounts"])
@@ -605,8 +638,8 @@ def get_data(filters):
             net_vat = bucket.get("net_vat", 0) or 0
 
             purchase_total += net_vat
-            total_purchase_amount += amount
-            total_purchase_adjustment += adjustment
+            purchase_total_amount += amount
+            purchase_total_adjustment += adjustment
 
             data.append({
                 "title": f"{label} - {title_suffix}",
@@ -617,8 +650,8 @@ def get_data(filters):
 
     data.append({
         "title": "<b>Total Purchase VAT</b>",
-        "amount": total_purchase_amount,
-        "adjustment": total_purchase_adjustment,
+        "amount": purchase_total_amount,
+        "adjustment": purchase_total_adjustment,
         "net_vat_amount": purchase_total
     })
 
@@ -689,13 +722,11 @@ def get_data(filters):
     })
 
     net_vat_due = sales_total - (purchase_total + expense_total)
-    total_amount = total_sales_amount - total_purchase_amount
-    total_adjustment = total_sales_adjustment - total_purchase_adjustment
 
     data.append({
         "title": "Total VAT due for current period",
-        "amount": total_amount,
-        "adjustment": total_adjustment,
+        "amount": None,
+        "adjustment": None,
         "net_vat_amount": net_vat_due
     })
 
