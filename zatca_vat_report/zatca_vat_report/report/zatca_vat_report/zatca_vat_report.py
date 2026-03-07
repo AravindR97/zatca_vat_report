@@ -29,6 +29,31 @@ def get_columns():
 from collections import defaultdict
 
 
+def get_detail_link(label, section, group_name, filters, bucket=None):
+    """Build a clickable <a href> link to ZATCA VAT Report Detail.
+    All filter values are encoded in the URL so Frappe's body click handler
+    can populate frappe.route_options automatically (same pattern as DCR Report).
+    """
+    from urllib.parse import urlencode, quote
+    from frappe.utils import get_url
+
+    params = {
+        "section": section,
+        "group_label": group_name,
+        "from_date": filters.get("from_date", ""),
+        "to_date": filters.get("to_date", ""),
+    }
+    if filters.get("company"):
+        params["company"] = filters["company"]
+    if bucket and section == "Purchase":
+        params["bucket"] = bucket
+
+    query_string = urlencode({k: v for k, v in params.items() if v})
+    report_name = quote("ZATCA VAT Report Detail", safe="")
+    url = get_url(f"/app/query-report/{report_name}?{query_string}")
+    return f'<a href="{url}">{frappe.utils.escape_html(label)}</a>'
+
+
 def get_account_group_map():
     settings = frappe.get_single("ZATCA VAT Report Settings")
 
@@ -42,6 +67,7 @@ def get_account_group_map():
     for row in settings.account_groups:
         group = frappe.get_doc("ZATCA Account Group", row.account_group)
         result["Sales"][group.account_group_label] = {
+            "group_name": group.name,
             "accounts": [acc.account for acc in group.linked_accounts],
             "tax_rate": row.tax_rate
         }
@@ -50,6 +76,7 @@ def get_account_group_map():
     for row in settings.purchase_account_groups:
         group = frappe.get_doc("ZATCA Account Group", row.account_group)
         result["Purchase"][group.account_group_label] = {
+            "group_name": group.name,
             "accounts": [acc.account for acc in group.linked_accounts],
             "tax_rate": row.tax_rate
         }
@@ -58,6 +85,7 @@ def get_account_group_map():
     for row in settings.expense_account_groups:
         group = frappe.get_doc("ZATCA Account Group", row.account_group)
         result["Expense"][group.account_group_label] = {
+            "group_name": group.name,
             "accounts": [acc.account for acc in group.linked_accounts],
             "tax_rate": row.tax_rate
         }
@@ -444,10 +472,29 @@ def get_purchase_vat_split(filters, accounts=None):
 
     vat_rows = frappe.db.sql(vat_query, values, as_dict=True)
 
+    # Per-invoice zero-rated base must be computed from ALL tax rows on the invoice (not just this group),
+    # otherwise a 0% group would incorrectly pick up the entire invoice base.
+    all_tax_rows = frappe.db.sql(
+        f"""
+        SELECT
+            inv.name AS invoice,
+            tax.tax_amount,
+            COALESCE(NULLIF(tax.rate, 0), tax_acc.tax_rate, 0) AS tax_rate
+        FROM `tabPurchase Invoice` inv
+        INNER JOIN `tabPurchase Taxes and Charges` tax ON tax.parent = inv.name
+        INNER JOIN `tabAccount` tax_acc ON tax_acc.name = tax.account_head
+        WHERE
+            {where_clause}
+            AND tax_acc.account_type = 'Tax'
+        """,
+        values,
+        as_dict=True,
+    )
+
     # Per-invoice: base already covered by non-zero tax rows; remaining = zero-rated base
     base_from_positive_rate = {}
     zero_rate_row_count = {}
-    for row in vat_rows:
+    for row in all_tax_rows:
         inv = row.invoice
         tax_rate = flt(row.tax_rate, 2) or 0
         if tax_rate > 0:
@@ -591,7 +638,7 @@ def get_data(filters):
         sales_total += net_vat
 
         data.append({
-            "title": label,
+            "title": get_detail_link(label, "Sales", info.get("group_name") or label, filters),
             "amount": amount,
             "adjustment": adjustment,
             "net_vat_amount": net_vat
@@ -642,7 +689,13 @@ def get_data(filters):
             purchase_total_adjustment += adjustment
 
             data.append({
-                "title": f"{label} - {title_suffix}",
+                "title": get_detail_link(
+                    f"{label} - {title_suffix}",
+                    "Purchase",
+                    info.get("group_name") or label,
+                    filters,
+                    bucket=title_suffix,
+                ),
                 "amount": amount,
                 "adjustment": adjustment,
                 "net_vat_amount": net_vat,
@@ -722,11 +775,13 @@ def get_data(filters):
     })
 
     net_vat_due = sales_total - (purchase_total + expense_total)
+    net_amount_due = sales_total_amount - purchase_total_amount
+    net_adjustment_due = sales_total_adjustment - purchase_total_adjustment
 
     data.append({
         "title": "Total VAT due for current period",
-        "amount": None,
-        "adjustment": None,
+        "amount": net_amount_due,
+        "adjustment": net_adjustment_due,
         "net_vat_amount": net_vat_due
     })
 

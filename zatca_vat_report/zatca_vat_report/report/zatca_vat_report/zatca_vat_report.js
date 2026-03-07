@@ -25,5 +25,5 @@ frappe.query_reports["ZATCA VAT Report"] = {
 			"width": 100,
 			"reqd": 1
 		},
-	]
+	],
 };
