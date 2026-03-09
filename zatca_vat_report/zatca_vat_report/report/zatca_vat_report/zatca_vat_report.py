@@ -644,6 +644,7 @@ def get_data(filters):
             "net_vat_amount": net_vat
         })
 
+
     data.append({
         "title": "<b>Total Sales VAT</b>",
         "amount": sales_total_amount,
@@ -671,8 +672,13 @@ def get_data(filters):
     purchase_total_amount = 0
     purchase_total_adjustment = 0
 
+    purchase_labels = list(groups["Purchase"].keys())
     for label, info in groups["Purchase"].items():
         split = get_purchase_vat_split(filters, info["accounts"])
+
+        group_amount = 0
+        group_adjustment = 0
+        group_vat = 0
 
         for key, title_suffix in (
             ("purchase", "Purchase"),
@@ -687,6 +693,9 @@ def get_data(filters):
             purchase_total += net_vat
             purchase_total_amount += amount
             purchase_total_adjustment += adjustment
+            group_amount += amount
+            group_adjustment += adjustment
+            group_vat += net_vat
 
             data.append({
                 "title": get_detail_link(
@@ -699,6 +708,15 @@ def get_data(filters):
                 "amount": amount,
                 "adjustment": adjustment,
                 "net_vat_amount": net_vat,
+            })
+
+        # Subtotal row per group (only when there are multiple groups)
+        if len(purchase_labels) > 1:
+            data.append({
+                "title": f"<b>Total {label}</b>",
+                "amount": group_amount,
+                "adjustment": group_adjustment,
+                "net_vat_amount": group_vat,
             })
 
     data.append({
