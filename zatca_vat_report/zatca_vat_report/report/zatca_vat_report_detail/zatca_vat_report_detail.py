@@ -42,6 +42,8 @@ def _get_columns(section: str):
 			{"fieldname": "invoice", "label": "Sales Invoice", "fieldtype": "Link", "options": "Sales Invoice", "width": 140},
 			{"fieldname": "posting_date", "label": "Posting Date", "fieldtype": "Date", "width": 110},
 			{"fieldname": "customer_name", "label": "Customer", "fieldtype": "Data", "width": 200},
+			{"fieldname": "customer", "label": "Customer ID", "fieldtype": "Link", "options": "Customer", "width": 150},
+			{"fieldname": "custom_vat_registration_number", "label": "VAT Reg. No.", "fieldtype": "Data", "width": 150},
 			{"fieldname": "base_amount", "label": "Taxable Base", "fieldtype": "Currency", "width": 140},
 			{"fieldname": "vat_amount", "label": "VAT", "fieldtype": "Currency", "width": 120},
 			{"fieldname": "grand_total", "label": "Grand Total", "fieldtype": "Currency", "width": 130},
@@ -52,6 +54,7 @@ def _get_columns(section: str):
 		{"fieldname": "invoice", "label": "Purchase Invoice", "fieldtype": "Link", "options": "Purchase Invoice", "width": 140},
 		{"fieldname": "posting_date", "label": "Posting Date", "fieldtype": "Date", "width": 110},
 		{"fieldname": "supplier_name", "label": "Supplier", "fieldtype": "Data", "width": 200},
+		{"fieldname": "tax_id", "label": "Tax ID", "fieldtype": "Data", "width": 150},
 		{"fieldname": "bucket", "label": "Bucket", "fieldtype": "Data", "width": 140},
 		{"fieldname": "base_amount", "label": "Taxable Base", "fieldtype": "Currency", "width": 140},
 		{"fieldname": "vat_amount", "label": "VAT", "fieldtype": "Currency", "width": 120},
@@ -84,12 +87,14 @@ def _get_sales_detail(from_date, to_date, company, tax_accounts):
 			si.posting_date,
 			si.customer,
 			si.customer_name,
+			cust.custom_vat_registration_number,
 			si.is_return,
 			stc.tax_amount,
 			COALESCE(NULLIF(stc.rate, 0), acc.tax_rate, 0) AS tax_rate
 		FROM `tabSales Invoice` si
 		INNER JOIN `tabSales Taxes and Charges` stc ON stc.parent = si.name
 		INNER JOIN `tabAccount` acc ON acc.name = stc.account_head
+		LEFT JOIN `tabCustomer` cust ON cust.name = si.customer
 		WHERE
 			{where_clause}
 			AND acc.account_type = 'Tax'
@@ -172,6 +177,8 @@ def _get_sales_detail(from_date, to_date, company, tax_accounts):
 				"invoice": inv,
 				"posting_date": r.posting_date,
 				"customer_name": r.customer_name or r.customer,
+				"customer": r.customer,
+				"custom_vat_registration_number": r.custom_vat_registration_number or "",
 				"base_amount": 0,
 				"vat_amount": 0,
 				"is_return": r.is_return,
@@ -206,6 +213,7 @@ def _get_purchase_bucket_base_map(from_date, to_date, company):
 			pi.posting_date,
 			pi.supplier,
 			pi.supplier_name,
+			sup.tax_id,
 			pi.is_return,
 			SUM(
 				CASE
@@ -252,8 +260,9 @@ def _get_purchase_bucket_base_map(from_date, to_date, company):
 		INNER JOIN `tabPurchase Invoice Item` pii ON pii.parent = pi.name
 		LEFT JOIN `tabAccount` acc ON acc.name = pii.expense_account
 		LEFT JOIN `tabAccount` acc_parent ON acc_parent.name = acc.parent_account
+		LEFT JOIN `tabSupplier` sup ON sup.name = pi.supplier
 		WHERE {where_clause}
-		GROUP BY pi.name, pi.posting_date, pi.supplier, pi.supplier_name, pi.is_return
+		GROUP BY pi.name, pi.posting_date, pi.supplier, pi.supplier_name, sup.tax_id, pi.is_return
 		""",
 		values,
 		as_dict=True,
@@ -375,6 +384,7 @@ def _get_purchase_detail(from_date, to_date, company, tax_accounts, bucket):
 				"invoice": r.invoice,
 				"posting_date": base_info.posting_date,
 				"supplier_name": base_info.supplier_name or base_info.supplier,
+				"tax_id": base_info.tax_id or "",
 				"bucket": bucket,
 				"base_amount": 0,
 				"vat_amount": 0,

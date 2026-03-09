@@ -23,6 +23,7 @@ def get_columns():
         {"fieldname": "title", "label": "Title", "fieldtype": "Data", "width": 300},
         {"fieldname": "amount", "label": "Amount", "fieldtype": "Currency", "width": 150},
         {"fieldname": "adjustment", "label": "Adjustment", "fieldtype": "Currency", "width": 150},
+        {"fieldname": "net_amount", "label": "Net Amount", "fieldtype": "Currency", "width": 150},
         {"fieldname": "net_vat_amount", "label": "Net VAT Amount", "fieldtype": "Currency", "width": 150},
     ]
 
@@ -504,16 +505,18 @@ def get_purchase_vat_split(filters, accounts=None):
         else:
             zero_rate_row_count[inv] = zero_rate_row_count.get(inv, 0) + 1
 
-    # Zero-rated taxable base = invoice total base minus base at non-zero rates (split across 0% rows)
+    # Zero-rated taxable base = invoice total base minus base at non-zero rates (split across 0% rows).
+    # Use abs() so return invoices (negative total_base) are handled correctly.
     zero_rated_base_per_row = {}
     for inv, base_info in base_map.items():
         total_base = (base_info.purchase_base or 0) + (base_info.expense_base or 0) + (base_info.asset_base or 0)
-        if total_base <= 0:
+        abs_total = abs(total_base)
+        if not abs_total:
             continue
         covered = base_from_positive_rate.get(inv, 0)
-        zero_base = max(0, total_base - covered)
+        zero_base = max(0, abs_total - covered)
         n_zero = max(1, zero_rate_row_count.get(inv, 0))
-        zero_rated_base_per_row[inv] = zero_base / n_zero
+        zero_rated_base_per_row[inv] = zero_base / n_zero  # always positive magnitude
 
     totals = {
         "purchase": {
@@ -546,7 +549,8 @@ def get_purchase_vat_split(filters, accounts=None):
         asset_base = base_info.asset_base or 0
 
         total_base = purchase_base + expense_base + asset_base
-        if not total_base:
+        abs_total = abs(total_base)
+        if not abs_total:
             continue
 
         # Taxable base for this tax row: from tax_amount/rate when rate > 0, else zero-rated base
@@ -560,10 +564,10 @@ def get_purchase_vat_split(filters, accounts=None):
         if row.is_return:
             net_vat = -abs(net_vat)
 
-        # Split this row's base and VAT by invoice's purchase/expense/asset proportion
-        purchase_share = row_base * (purchase_base / total_base)
-        expense_share = row_base * (expense_base / total_base)
-        asset_share = row_base * (asset_base / total_base)
+        # Split by proportion using abs values so returns (negative bases) give the correct ratio
+        purchase_share = row_base * (abs(purchase_base) / abs_total)
+        expense_share = row_base * (abs(expense_base) / abs_total)
+        asset_share = row_base * (abs(asset_base) / abs_total)
 
         vat_purchase = net_vat * (purchase_base / total_base)
         vat_expense = net_vat * (expense_base / total_base)
@@ -802,5 +806,14 @@ def get_data(filters):
         "adjustment": net_adjustment_due,
         "net_vat_amount": net_vat_due
     })
+
+    # Compute net_amount = amount - adjustment for every row
+    for row in data:
+        amt = row.get("amount")
+        adj = row.get("adjustment")
+        if amt is not None and adj is not None:
+            row["net_amount"] = flt(amt) - flt(adj)
+        else:
+            row["net_amount"] = None
 
     return data
