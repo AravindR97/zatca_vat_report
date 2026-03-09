@@ -44,6 +44,7 @@ def _get_columns(section: str):
 			{"fieldname": "customer_name", "label": "Customer", "fieldtype": "Data", "width": 200},
 			{"fieldname": "base_amount", "label": "Taxable Base", "fieldtype": "Currency", "width": 140},
 			{"fieldname": "vat_amount", "label": "VAT", "fieldtype": "Currency", "width": 120},
+			{"fieldname": "grand_total", "label": "Grand Total", "fieldtype": "Currency", "width": 130},
 			{"fieldname": "is_return", "label": "Is Return", "fieldtype": "Check", "width": 90},
 		]
 
@@ -54,6 +55,7 @@ def _get_columns(section: str):
 		{"fieldname": "bucket", "label": "Bucket", "fieldtype": "Data", "width": 140},
 		{"fieldname": "base_amount", "label": "Taxable Base", "fieldtype": "Currency", "width": 140},
 		{"fieldname": "vat_amount", "label": "VAT", "fieldtype": "Currency", "width": 120},
+		{"fieldname": "grand_total", "label": "Grand Total", "fieldtype": "Currency", "width": 130},
 		{"fieldname": "is_return", "label": "Is Return", "fieldtype": "Check", "width": 90},
 	]
 
@@ -156,6 +158,10 @@ def _get_sales_detail(from_date, to_date, company, tax_accounts):
 		else:
 			row_base = zero_base_per_row.get(inv, 0)
 
+		# Returns: negate both base and VAT
+		if r.is_return:
+			row_base = -abs(row_base)
+
 		vat = flt(r.tax_amount) or 0
 		if r.is_return:
 			vat = -abs(vat)
@@ -174,7 +180,11 @@ def _get_sales_detail(from_date, to_date, company, tax_accounts):
 		rec["base_amount"] += row_base
 		rec["vat_amount"] += vat
 
-	return list(out_map.values())
+	result = list(out_map.values())
+	for rec in result:
+		rec["grand_total"] = flt(rec["base_amount"]) + flt(rec["vat_amount"])
+	result.sort(key=lambda x: (x.get("posting_date") or "", x.get("invoice") or ""))
+	return result
 
 
 def _classify_bucket(base_info, bucket_name):
@@ -316,15 +326,15 @@ def _get_purchase_detail(from_date, to_date, company, tax_accounts, bucket):
 	zero_base_per_row = {}
 	for inv, base_info in base_map.items():
 		total_base = flt(base_info.purchase_base) + flt(base_info.expense_base) + flt(base_info.asset_base)
-		if total_base <= 0:
+		abs_total = abs(total_base)
+		if not abs_total:
 			continue
 		covered = base_from_positive_rate.get(inv, 0)
-		zero_base = max(0, total_base - covered)
+		zero_base = max(0, abs_total - covered)
 		n_zero = max(1, zero_rate_row_count.get(inv, 0))
-		zero_base_per_row[inv] = zero_base / n_zero
+		zero_base_per_row[inv] = zero_base / n_zero  # always positive magnitude
 
 	# Aggregate per invoice for requested bucket only
-	out = []
 	out_map = {}
 	for r in tax_rows:
 		base_info = base_map.get(r.invoice)
@@ -332,12 +342,18 @@ def _get_purchase_detail(from_date, to_date, company, tax_accounts, bucket):
 			continue
 
 		total_base = flt(base_info.purchase_base) + flt(base_info.expense_base) + flt(base_info.asset_base)
-		if not total_base:
+		abs_total = abs(total_base)
+		if not abs_total:
 			continue
 
 		bucket_base = _classify_bucket(base_info, bucket)
-		if bucket_base <= 0:
+		abs_bucket = abs(bucket_base)
+		# skip if this invoice has nothing in the requested bucket
+		if not abs_bucket:
 			continue
+
+		# Use absolute values for ratio so returns are handled correctly
+		ratio = abs_bucket / abs_total
 
 		rate = flt(r.tax_rate) or 0
 		if rate > 0:
@@ -345,11 +361,13 @@ def _get_purchase_detail(from_date, to_date, company, tax_accounts, bucket):
 		else:
 			row_base = zero_base_per_row.get(r.invoice, 0)
 
-		base_share = row_base * (bucket_base / total_base)
-		vat = flt(r.tax_amount) or 0
+		base_share = row_base * ratio
+		vat_share = abs(flt(r.tax_amount)) * ratio
+
+		# Returns: negate both base and VAT
 		if r.is_return:
-			vat = -abs(vat)
-		vat_share = vat * (bucket_base / total_base)
+			base_share = -base_share
+			vat_share = -vat_share
 
 		rec = out_map.setdefault(
 			r.invoice,
@@ -367,6 +385,8 @@ def _get_purchase_detail(from_date, to_date, company, tax_accounts, bucket):
 		rec["vat_amount"] += vat_share
 
 	out = list(out_map.values())
+	for rec in out:
+		rec["grand_total"] = flt(rec["base_amount"]) + flt(rec["vat_amount"])
 	out.sort(key=lambda x: (x.get("posting_date") or "", x.get("invoice") or ""))
 	return out
 
