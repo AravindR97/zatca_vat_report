@@ -458,7 +458,7 @@ def get_purchase_vat_split(filters, accounts=None):
             inv.name AS invoice,
             inv.is_return,
             tax.account_head,
-            tax.tax_amount,
+            COALESCE(tax.base_tax_amount_after_discount_amount, tax.base_tax_amount) AS base_tax_amount,
             COALESCE(NULLIF(tax.rate, 0), tax_acc.tax_rate, 0) AS tax_rate
         FROM `tabPurchase Invoice` inv
         INNER JOIN `tabPurchase Taxes and Charges` tax
@@ -479,7 +479,7 @@ def get_purchase_vat_split(filters, accounts=None):
         f"""
         SELECT
             inv.name AS invoice,
-            tax.tax_amount,
+            COALESCE(tax.base_tax_amount_after_discount_amount, tax.base_tax_amount) AS base_tax_amount,
             COALESCE(NULLIF(tax.rate, 0), tax_acc.tax_rate, 0) AS tax_rate
         FROM `tabPurchase Invoice` inv
         INNER JOIN `tabPurchase Taxes and Charges` tax ON tax.parent = inv.name
@@ -500,7 +500,7 @@ def get_purchase_vat_split(filters, accounts=None):
         tax_rate = flt(row.tax_rate, 2) or 0
         if tax_rate > 0:
             base_from_positive_rate[inv] = base_from_positive_rate.get(inv, 0) + (
-                abs(flt(row.tax_amount, 2)) / (tax_rate / 100)
+                abs(flt(row.base_tax_amount, 2)) / (tax_rate / 100)
             )
         else:
             zero_rate_row_count[inv] = zero_rate_row_count.get(inv, 0) + 1
@@ -556,11 +556,11 @@ def get_purchase_vat_split(filters, accounts=None):
         # Taxable base for this tax row: from tax_amount/rate when rate > 0, else zero-rated base
         tax_rate = flt(row.tax_rate, 2) or 0
         if tax_rate > 0:
-            row_base = abs(flt(row.tax_amount, 2)) / (tax_rate / 100)
+            row_base = abs(flt(row.base_tax_amount, 2)) / (tax_rate / 100)
         else:
             row_base = zero_rated_base_per_row.get(row.invoice, 0)
 
-        net_vat = flt(row.tax_amount, 2) or 0
+        net_vat = flt(row.base_tax_amount, 2) or 0
         if row.is_return:
             net_vat = -abs(net_vat)
 

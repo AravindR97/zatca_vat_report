@@ -89,7 +89,7 @@ def _get_sales_detail(from_date, to_date, company, tax_accounts):
 			si.customer_name,
 			cust.custom_vat_registration_number,
 			si.is_return,
-			stc.tax_amount,
+			COALESCE(stc.base_tax_amount_after_discount_amount, stc.base_tax_amount) AS base_tax_amount,
 			COALESCE(NULLIF(stc.rate, 0), acc.tax_rate, 0) AS tax_rate
 		FROM `tabSales Invoice` si
 		INNER JOIN `tabSales Taxes and Charges` stc ON stc.parent = si.name
@@ -109,7 +109,7 @@ def _get_sales_detail(from_date, to_date, company, tax_accounts):
 		f"""
 		SELECT
 			si.name AS invoice,
-			stc.tax_amount,
+			COALESCE(stc.base_tax_amount_after_discount_amount, stc.base_tax_amount) AS base_tax_amount,
 			COALESCE(NULLIF(stc.rate, 0), acc.tax_rate, 0) AS tax_rate
 		FROM `tabSales Invoice` si
 		INNER JOIN `tabSales Taxes and Charges` stc ON stc.parent = si.name
@@ -128,7 +128,9 @@ def _get_sales_detail(from_date, to_date, company, tax_accounts):
 		inv = r.invoice
 		rate = flt(r.tax_rate) or 0
 		if rate > 0:
-			base_from_positive_rate[inv] = base_from_positive_rate.get(inv, 0) + (abs(flt(r.tax_amount)) / (rate / 100))
+			base_from_positive_rate[inv] = base_from_positive_rate.get(inv, 0) + (
+				abs(flt(r.base_tax_amount)) / (rate / 100)
+			)
 		else:
 			zero_rate_row_count[inv] = zero_rate_row_count.get(inv, 0) + 1
 
@@ -159,7 +161,7 @@ def _get_sales_detail(from_date, to_date, company, tax_accounts):
 		inv = r.invoice
 		rate = flt(r.tax_rate) or 0
 		if rate > 0:
-			row_base = abs(flt(r.tax_amount)) / (rate / 100)
+			row_base = abs(flt(r.base_tax_amount)) / (rate / 100)
 		else:
 			row_base = zero_base_per_row.get(inv, 0)
 
@@ -167,7 +169,7 @@ def _get_sales_detail(from_date, to_date, company, tax_accounts):
 		if r.is_return:
 			row_base = -abs(row_base)
 
-		vat = flt(r.tax_amount) or 0
+		vat = flt(r.base_tax_amount) or 0
 		if r.is_return:
 			vat = -abs(vat)
 
@@ -289,7 +291,7 @@ def _get_purchase_detail(from_date, to_date, company, tax_accounts, bucket):
 		SELECT
 			pi.name AS invoice,
 			pi.is_return,
-			ptc.tax_amount,
+			COALESCE(ptc.base_tax_amount_after_discount_amount, ptc.base_tax_amount) AS base_tax_amount,
 			COALESCE(NULLIF(ptc.rate, 0), acc.tax_rate, 0) AS tax_rate
 		FROM `tabPurchase Invoice` pi
 		INNER JOIN `tabPurchase Taxes and Charges` ptc ON ptc.parent = pi.name
@@ -309,7 +311,7 @@ def _get_purchase_detail(from_date, to_date, company, tax_accounts, bucket):
 		f"""
 		SELECT
 			pi.name AS invoice,
-			ptc.tax_amount,
+			COALESCE(ptc.base_tax_amount_after_discount_amount, ptc.base_tax_amount) AS base_tax_amount,
 			COALESCE(NULLIF(ptc.rate, 0), acc.tax_rate, 0) AS tax_rate
 		FROM `tabPurchase Invoice` pi
 		INNER JOIN `tabPurchase Taxes and Charges` ptc ON ptc.parent = pi.name
@@ -328,7 +330,9 @@ def _get_purchase_detail(from_date, to_date, company, tax_accounts, bucket):
 		inv = r.invoice
 		rate = flt(r.tax_rate) or 0
 		if rate > 0:
-			base_from_positive_rate[inv] = base_from_positive_rate.get(inv, 0) + (abs(flt(r.tax_amount)) / (rate / 100))
+			base_from_positive_rate[inv] = base_from_positive_rate.get(inv, 0) + (
+				abs(flt(r.base_tax_amount)) / (rate / 100)
+			)
 		else:
 			zero_rate_row_count[inv] = zero_rate_row_count.get(inv, 0) + 1
 
@@ -366,12 +370,12 @@ def _get_purchase_detail(from_date, to_date, company, tax_accounts, bucket):
 
 		rate = flt(r.tax_rate) or 0
 		if rate > 0:
-			row_base = abs(flt(r.tax_amount)) / (rate / 100)
+			row_base = abs(flt(r.base_tax_amount)) / (rate / 100)
 		else:
 			row_base = zero_base_per_row.get(r.invoice, 0)
 
 		base_share = row_base * ratio
-		vat_share = abs(flt(r.tax_amount)) * ratio
+		vat_share = abs(flt(r.base_tax_amount)) * ratio
 
 		# Returns: negate both base and VAT
 		if r.is_return:
