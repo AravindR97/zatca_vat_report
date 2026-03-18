@@ -34,16 +34,18 @@ def get_detail_link(label, section, group_name, filters, bucket=None):
     """Build a clickable <a href> link to ZATCA VAT Report Detail.
     All filter values are encoded in the URL so Frappe's body click handler
     can populate frappe.route_options automatically (same pattern as DCR Report).
+    group_name is optional (e.g. for Bayan section which has no account group).
     """
     from urllib.parse import urlencode, quote
     from frappe.utils import get_url
 
     params = {
         "section": section,
-        "group_label": group_name,
         "from_date": filters.get("from_date", ""),
         "to_date": filters.get("to_date", ""),
     }
+    if group_name:
+        params["group_label"] = group_name
     if filters.get("company"):
         params["company"] = filters["company"]
     if bucket and section == "Purchase":
@@ -351,6 +353,7 @@ def get_purchase_vat_split(filters, accounts=None):
         "inv.docstatus = 1",
         "inv.posting_date BETWEEN %(from_date)s AND %(to_date)s",
         "(inv.bill_date IS NULL OR inv.bill_date >= %(from_date)s)",
+        "COALESCE(inv.custom_bayan_value, 0) = 0",
     ]
 
     values = {}
@@ -604,6 +607,37 @@ def get_purchase_vat_split(filters, accounts=None):
 
     return result
 
+def get_bayan_totals(filters):
+    """Return amount (non-return), adjustment (return), and net for custom_bayan_value."""
+    conditions = [
+        "docstatus = 1",
+        "posting_date BETWEEN %(from_date)s AND %(to_date)s",
+        "COALESCE(custom_bayan_value, 0) != 0",
+    ]
+    values = dict(filters)
+    if filters.get("company"):
+        conditions.append("company = %(company)s")
+    where = " AND ".join(conditions)
+    rows = frappe.db.sql(
+        f"""
+        SELECT
+            SUM(CASE WHEN is_return = 0 THEN custom_bayan_value ELSE 0 END) AS amount,
+            SUM(CASE WHEN is_return = 1 THEN custom_bayan_value ELSE 0 END) AS adjustment
+        FROM `tabPurchase Invoice`
+        WHERE {where}
+        """,
+        values,
+        as_dict=True,
+    )
+    amount = flt((rows or [{}])[0].get("amount"))
+    adjustment = flt((rows or [{}])[0].get("adjustment"))
+    return {
+        "amount": amount,
+        "adjustment": adjustment,
+        "net_vat": amount - adjustment,
+    }
+
+
 def get_data(filters):
     data = []
     groups = get_account_group_map()
@@ -737,6 +771,30 @@ def get_data(filters):
         "net_vat_amount": None
     })
 
+    # ---------- BAYAN ----------
+    bayan = get_bayan_totals(filters)
+    bayan_total = bayan["net_vat"]
+
+    data.append({
+        "title": "<b>Bayan</b>",
+        "amount": None,
+        "adjustment": None,
+        "net_vat_amount": None
+    })
+    data.append({
+        "title": get_detail_link("Total Bayan Value", "Bayan", None, filters),
+        "amount": bayan["amount"],
+        "adjustment": bayan["adjustment"],
+        "net_vat_amount": 0
+    })
+
+    data.append({
+        "title": None,
+        "amount": None,
+        "adjustment": None,
+        "net_vat_amount": None
+    })
+
     # ---------- VAT ON OTHER EXPENSES ----------
     data.append({
         "title": "<b>VAT on Other Expenses</b>",
@@ -796,7 +854,7 @@ def get_data(filters):
         "net_vat_amount": None
     })
 
-    net_vat_due = sales_total - (purchase_total + expense_total)
+    net_vat_due = sales_total - (purchase_total + expense_total + bayan_total)
     net_amount_due = sales_total_amount - purchase_total_amount
     net_adjustment_due = sales_total_adjustment - purchase_total_adjustment
 
