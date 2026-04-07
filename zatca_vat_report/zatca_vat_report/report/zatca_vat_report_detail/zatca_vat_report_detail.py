@@ -151,7 +151,9 @@ def _get_sales_detail(from_date, to_date, company, tax_accounts):
 	zero_base_per_row = {}
 	for inv, total_base in invoice_base.items():
 		covered = base_from_positive_rate.get(inv, 0)
-		zero_base = max(0, flt(total_base) - covered)
+		# Returns can carry negative base_net_total; use absolute base magnitude
+		# so 0% taxable share is still computed correctly.
+		zero_base = max(0, abs(flt(total_base)) - covered)
 		n_zero = max(1, zero_rate_row_count.get(inv, 0))
 		zero_base_per_row[inv] = zero_base / n_zero
 
