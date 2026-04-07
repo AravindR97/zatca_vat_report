@@ -241,9 +241,33 @@ def _get_purchase_bucket_base_map(from_date, to_date, company):
 						'Depreciation',
 						'Service Received But Not Billed',
 						'Expenses Included In Valuation',
-						'Chargeable'
+						'Chargeable',
+						'Cost of Goods Sold'
 					)
-					OR COALESCE(acc.root_type, acc_parent.root_type) = 'Expense'
+					OR (
+						(
+							COALESCE(acc.account_type, acc_parent.account_type) IS NULL
+							OR COALESCE(acc.account_type, acc_parent.account_type) NOT IN (
+								'Fixed Asset',
+								'Capital Work in Progress',
+								'Accumulated Depreciation',
+								'Expenses Included In Asset Valuation',
+								'Asset Received But Not Billed',
+								'Expense Account',
+								'Direct Expense',
+								'Indirect Expense',
+								'Depreciation',
+								'Service Received But Not Billed',
+								'Expenses Included In Valuation',
+								'Chargeable',
+								'Cost of Goods Sold',
+								'Stock',
+								'Stock Adjustment',
+								'Stock Received But Not Billed'
+							)
+						)
+						AND COALESCE(acc.root_type, acc_parent.root_type) = 'Expense'
+					)
 					THEN pii.base_net_amount
 					ELSE 0
 				END
@@ -251,10 +275,33 @@ def _get_purchase_bucket_base_map(from_date, to_date, company):
 			SUM(
 				CASE
 					WHEN COALESCE(acc.account_type, acc_parent.account_type) IN (
-						'Cost of Goods Sold',
 						'Stock',
 						'Stock Adjustment',
 						'Stock Received But Not Billed'
+					)
+					OR (
+						(
+							COALESCE(acc.account_type, acc_parent.account_type) IS NULL
+							OR COALESCE(acc.account_type, acc_parent.account_type) NOT IN (
+								'Fixed Asset',
+								'Capital Work in Progress',
+								'Accumulated Depreciation',
+								'Expenses Included In Asset Valuation',
+								'Asset Received But Not Billed',
+								'Expense Account',
+								'Direct Expense',
+								'Indirect Expense',
+								'Depreciation',
+								'Service Received But Not Billed',
+								'Expenses Included In Valuation',
+								'Chargeable',
+								'Cost of Goods Sold',
+								'Stock',
+								'Stock Adjustment',
+								'Stock Received But Not Billed'
+							)
+						)
+						AND COALESCE(acc.root_type, acc_parent.root_type) != 'Expense'
 					)
 					THEN pii.base_net_amount
 					ELSE 0

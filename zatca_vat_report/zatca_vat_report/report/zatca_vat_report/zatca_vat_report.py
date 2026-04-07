@@ -379,11 +379,12 @@ def get_purchase_vat_split(filters, accounts=None):
     # - Expense: account_type in
     #            ('Expense Account', 'Direct Expense', 'Indirect Expense',
     #             'Depreciation', 'Service Received But Not Billed',
-    #             'Expenses Included In Valuation', 'Chargeable')
-    #            OR root_type = 'Expense'
+    #             'Expenses Included In Valuation', 'Chargeable',
+    #             'Cost of Goods Sold')
+    #            OR (account_type is null/unmapped AND root_type = 'Expense')
     # - Purchase (stock): account_type in
-    #            ('Cost of Goods Sold', 'Stock', 'Stock Adjustment',
-    #             'Stock Received But Not Billed')
+    #            ('Stock', 'Stock Adjustment', 'Stock Received But Not Billed')
+    #            OR (account_type is null/unmapped AND root_type != 'Expense')
     base_query = f"""
         SELECT
             inv.name AS invoice,
@@ -410,9 +411,33 @@ def get_purchase_vat_split(filters, accounts=None):
                             'Depreciation',
                             'Service Received But Not Billed',
                             'Expenses Included In Valuation',
-                            'Chargeable'
+                            'Chargeable',
+                            'Cost of Goods Sold'
                          )
-                         OR COALESCE(acc.root_type, acc_parent.root_type) = 'Expense'
+                         OR (
+                            (
+                                COALESCE(acc.account_type, acc_parent.account_type) IS NULL
+                                OR COALESCE(acc.account_type, acc_parent.account_type) NOT IN (
+                                    'Fixed Asset',
+                                    'Capital Work in Progress',
+                                    'Accumulated Depreciation',
+                                    'Expenses Included In Asset Valuation',
+                                    'Asset Received But Not Billed',
+                                    'Expense Account',
+                                    'Direct Expense',
+                                    'Indirect Expense',
+                                    'Depreciation',
+                                    'Service Received But Not Billed',
+                                    'Expenses Included In Valuation',
+                                    'Chargeable',
+                                    'Cost of Goods Sold',
+                                    'Stock',
+                                    'Stock Adjustment',
+                                    'Stock Received But Not Billed'
+                                )
+                            )
+                            AND COALESCE(acc.root_type, acc_parent.root_type) = 'Expense'
+                         )
                     THEN pii.base_net_amount
                     ELSE 0
                 END
@@ -420,10 +445,33 @@ def get_purchase_vat_split(filters, accounts=None):
             SUM(
                 CASE
                     WHEN COALESCE(acc.account_type, acc_parent.account_type) IN (
-                        'Cost of Goods Sold',
                         'Stock',
                         'Stock Adjustment',
                         'Stock Received But Not Billed'
+                    )
+                    OR (
+                        (
+                            COALESCE(acc.account_type, acc_parent.account_type) IS NULL
+                            OR COALESCE(acc.account_type, acc_parent.account_type) NOT IN (
+                                'Fixed Asset',
+                                'Capital Work in Progress',
+                                'Accumulated Depreciation',
+                                'Expenses Included In Asset Valuation',
+                                'Asset Received But Not Billed',
+                                'Expense Account',
+                                'Direct Expense',
+                                'Indirect Expense',
+                                'Depreciation',
+                                'Service Received But Not Billed',
+                                'Expenses Included In Valuation',
+                                'Chargeable',
+                                'Cost of Goods Sold',
+                                'Stock',
+                                'Stock Adjustment',
+                                'Stock Received But Not Billed'
+                            )
+                        )
+                        AND COALESCE(acc.root_type, acc_parent.root_type) != 'Expense'
                     )
                     THEN pii.base_net_amount
                     ELSE 0
